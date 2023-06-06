@@ -1,0 +1,1 @@
+/opt/homebrew/bin/markdown-pdf "/Users/kevinhuang/Documents/Obsidian Vault/main.md"

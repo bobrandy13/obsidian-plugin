@@ -1,31 +1,32 @@
 import {
 	App,
-	Editor,
-	MarkdownView,
 	Modal,
 	Notice,
-	Platform,
 	Plugin,
 	PluginSettingTab,
 	Setting,
 	TFile,
 	TFolder,
 	normalizePath,
-	request,
 	requestUrl,
 } from "obsidian";
 
+import { exec } from "child_process";
+import axios from "axios";
+import FormData from "form-data";
 import * as fs from "fs";
-import markdownpdf from "markdown-pdf";
-import { exec, spawn } from "child_process";
-import * as path from "path";
+import { json } from "stream/consumers";
+import { readFile } from "fs/promises";
 
 let ACCESS_TOKEN =
-	"";
+	"11644~5p2n81i38xj4Wwlf9tPFvKJAXSekHFufTVthnh8Mes4udNn7ILI8xqp9hh1MjRo4";
 const LIST_COURSE_ASSIGNMENTS = "https://cths.instructure.com/api/v1/courses/";
 const LIST_COURSE_ASSIGNMENTS_2 = "/assignments?access_token=";
 const LIST_USER_COURSES =
 	"https://cths.instructure.com/api/v1/courses?enrollment_type=student&enrollment_state=active&access_token=";
+
+const PANDOC_PATH = "/usr/local/bin/pandoc";
+const PDFLATEX_PATH = "/opt/homebrew/bin/pdflatex";
 
 type TAssignemnt = {
 	allowed_attempts: number;
@@ -37,8 +38,11 @@ type TAssignemnt = {
 	id: number;
 };
 
-
 // Remember to rename these classes and interfaces!
+interface submit_json_response {
+	upload_params: object;
+	upload_url: string;
+}
 
 interface MyPluginSettings {
 	mySetting: string;
@@ -55,27 +59,26 @@ export default class MyPlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
-    
-    this.addCommand({
-      id: "display-modal", 
-      name: "Display modal", 
-      callback: () => {
+
+		this.addCommand({
+			id: "display-modal",
+			name: "Display modal",
+			callback: () => {
 				new ApiModal(this.app, (result) => {
 					new Notice(`Hello, ${result}!`);
 				}).open();
-      }
-    })
-
+			},
+		});
 
 		// This creates an icon in the left ribbon.
-    
-    const apiRibbonEl = this.addRibbonIcon(
-      "dice", 
-      "Sample Plugin", 
-      (evt: MouseEvent) => {
-        new Notice("Please enter your api key")
-      }
-    )
+
+		const apiRibbonEl = this.addRibbonIcon(
+			"dice",
+			"Sample Plugin",
+			(evt: MouseEvent) => {
+				new Notice("Please enter your api key");
+			}
+		);
 
 		// Perform additional things with the ribbon
 		apiRibbonEl.addClass("my-plugin-ribbon-class");
@@ -90,7 +93,6 @@ export default class MyPlugin extends Plugin {
 			name: "Submit Current File",
 			callback: () => {
 				const { workspace } = this.app;
-				console.log(workspace.getActiveFile());
 				if (workspace.getActiveFile() !== null) {
 					this.submitCurrentFile(workspace.getActiveFile());
 				}
@@ -102,7 +104,6 @@ export default class MyPlugin extends Plugin {
 			id: "open-sample-modal-simple",
 			name: "Load Canvas Data",
 			callback: () => {
-				console.log(ACCESS_TOKEN)
 				this.createNewNote("hello world");
 
 				new SampleModal(this.app).open();
@@ -172,48 +173,170 @@ export default class MyPlugin extends Plugin {
 		console.log(metadata);
 
 		const paths = `${base_path}/${file.path}`;
-		console.log(paths);
+		console.log(base_path, paths);
 
 		if (file) {
-			// exec('python3 --version', (err, stdout, stderr) => {
-			// 	if (err) {
-			// 		console.error(err); 
-			// 		return
-			// 	}
-			// 	console.log(stdout)
-			// })
-			// exec(
-			// 	`"/opt/homebrew/bin/md-to-pdf" "${paths}" -o "${paths.replace(".md", ".pdf")}"`,
-			// 	(err, stdout, stderr) => {
-			// 		if (err) {
-			// 			console.error(`exec error ${err}`);
-			// 			return;
-			// 		}
-			// 	}
-			// );
-			exec(`/opt/homebrew/bin/pandoc "${paths}" -o "${paths.replace('.md', '.pdf')}"`, {shell: "bash"}, (err, stdout, stderr) => {
-				if (err) {
-					console.error(err)
+			// use pandoc to convert markdown file to pdf file before submissions.
+			exec(
+				`${PANDOC_PATH} --pdf-engine=${PDFLATEX_PATH} '${paths}' -o '${paths.replace(
+					".md",
+					".pdf"
+				)}'`,
+				(err, stdout, stderr) => {
+					if (err) {
+						console.error(err);
+					}
+					console.log(stdout);
+					// TODO: file sucessfully created
 				}
-				console.log(stdout)
-			})
+			);
 		}
-		// console.log(process.cwd())
 		//TODO: After the file is created, I want to submit it to canvas, and then delete the left over pdf file.
 		// this.submitToCanvas(paths);
+		this.submitToCanvas(
+			paths.replace(".md", ".pdf"),
+			metadata[1].split(": ")[1],
+			metadata[2].split(": ")[1]
+		);
+		this.testFunc();
+	}
+
+	async testFunc() {
+		const form = new FormData();
+		form.append("filename", "main.pdf");
+		form.append("content_type", "pdf");
+		const filePath = "/Users/kevinhuang/WebstormProjects/nodejs/main.pdf";
+
+		// Read the file and create a Blob object
+		const fileBuffer = await readFile(filePath);
+		const fileBlob = new Blob([fileBuffer]);
+
+		// Append the fileBlob to the FormData object
+		form.append("file", fileBlob, "main.pdf");
+
+		const token =
+			"11644~5p2n81i38xj4Wwlf9tPFvKJAXSekHFufTVthnh8Mes4udNn7ILI8xqp9hh1MjRo4";
+
+		const form1 = new FormData();
+		form1.append("name", "main.pdf");
+		form1.append("content_type", "pdf");
+
+		let tokenG;
+
+		// first part
+		// tell canvas, that I am going to post a file called main.pdf, with type pdf to their servers
+		await axios
+			.post(
+				"https://cths.instructure.com/api/v1/users/self/files",
+				form1,
+				{
+					headers: {
+						...form.getHeaders(),
+						Authorization: `Bearer ${token}`,
+					},
+				}
+			)
+			.then((res) => {
+				console.log(res.data.upload_url);
+				const baseURl = res.data.upload_url;
+				const regex = /token=([^&]+)/;
+				const matches = baseURl.match(regex);
+				const token = matches && matches[1];
+				console.log(token);
+				tokenG = token;
+				console.log("hello worlfd");
+			});
+			const requestParams = {
+				url: 'https://inst-fs-syd-prod.inscloudgate.net/files' + "?token=" + tokenG,
+				method: 'POST',
+				body: form.getBuffer(),
+				contentType: form.getHeaders()['content-type']
+			};
+			
+			// Make the request using the requestUrl function
+			await requestUrl(requestParams)
+				.then(res => console.log(res))
+				.catch(err => {
+					console.error(err.response)
+				})
+				.finally(() => console.log("function finally ran"));
+
+		// await axios
+		// 	.post("https://inst-fs-syd-prod.inscloudgate.net/files", form, {
+		// 		params: {
+		// 			token: tokenG,
+		// 		},
+		// 		headers: {
+		// 			...form.getHeaders(),
+		// 		},
+		// 	})
+		// 	.catch((err) => console.log(err))
+		// 	.then((res) => console.log(res))
+		// 	.finally(() => console.log("fuction finally ran"));
 	}
 
 	async submitToCanvas(
+		fileName: string,
 		filePath: string,
 		course_id: string,
 		assignment_id: string
 	) {
-		console.log(filePath);
-		await requestUrl(
-			`cths.instructure.com/api/v1/courses/${course_id}/assignments/${assignment_id}/submissions/self/files`
-		).then((res) => {
-			console.log(res);
+		console.log(filePath, course_id, assignment_id);
+		let jsonresponse: submit_json_response;
+		// Step 1: TODO: Alert Canvas
+		const form = new FormData();
+		form.append("name", "main.pdf");
+		form.append("content_type", "pdf");
+
+		const formdatastring = new URLSearchParams(form).toString();
+		console.log(ACCESS_TOKEN);
+
+		await requestUrl({
+			url: `https://cths.instructure.com/api/v1/courses/13451/assignments/150837/submissions/self/files`,
+			method: "POST",
+			body: formdatastring,
+			headers: {
+				Authorization: `Bearer ${ACCESS_TOKEN}`,
+			},
+		}).then((res) => {
+			jsonresponse = res.json;
+			console.log(jsonresponse);
 		});
+
+		// Step 2: TODO: upload to Canvas
+		const uploadForm = new FormData();
+		// for(const key in jsonresponse["upload_params"]) {
+		// 	console.log(`${key}, ${jsonresponse['upload_params'][key]}`)
+		// 	uploadForm.append(`${key}`, `${jsonresponse["upload_params"][key]}`)
+		// }
+		uploadForm.append("filename", "main.pdf");
+		uploadForm.append("content_type", "pdf");
+		uploadForm.append(
+			"file",
+			fs.createReadStream(
+				"/Users/kevinhuang/WebstormProjects/nodejs/main.pdf"
+			)
+		);
+
+		const uploadFormString = new URLSearchParams(uploadForm).toString();
+		console.log([jsonresponse.upload_url]);
+		console.log(typeof uploadFormString);
+
+		await requestUrl({
+			url: jsonresponse.upload_url,
+			method: "POST",
+			body: uploadFormString,
+			contentType: "multipart/form-data",
+		})
+			.catch((err) => console.log(err))
+			.then((res) => console.log(res))
+			.finally(() => console.log("fuction finally ran"));
+
+		// await requestUrl(
+		// 	`cths.instructure.com/api/v1/courses/${course_id}/assignments/${assignment_id}/submissions/self/files`
+		// ).then((res) => {
+		// 	console.log(res);
+		// });
 
 		return;
 	}
@@ -222,17 +345,14 @@ export default class MyPlugin extends Plugin {
 	async createDirectory(dir: string): Promise<void> {
 		const { vault } = this.app;
 		const { adapter } = vault;
-		console.log(this.folder);
 
 		const root = vault.getRoot().path;
 
 		const dirPath = root + dir;
-		console.log("dirpath", dirPath);
 
 		const directoryExists = await adapter.exists(dirPath);
 
 		if (!directoryExists) {
-			console.log("make file");
 			return adapter.mkdir(normalizePath(dirPath));
 		}
 	}
@@ -251,7 +371,6 @@ export default class MyPlugin extends Plugin {
 			const arrayData = Object.values(data);
 			fetchData = arrayData;
 			arrayData.map((courseDataFetch, idx) => {
-				// console.log(courseDataFetch)
 				fileContents += `Course [[${courseDataFetch.name}]] \n`;
 			});
 		});
@@ -260,7 +379,6 @@ export default class MyPlugin extends Plugin {
 			for (const sub_path of fetchData) {
 				await this.createDirectory("Courses/" + sub_path.name);
 				let courseAssignmentData;
-				console.log(sub_path);
 				let list_of_assignments = "# Assignments \n --- \n";
 				const dirExists = await adapter.exists(
 					"Courses/" + sub_path.name
@@ -295,7 +413,6 @@ export default class MyPlugin extends Plugin {
 		const filePath = "./canvasCourses.md";
 
 		const folder_or_file = vault.getAbstractFileByPath("canvasCourses.md");
-		// console.log(folder_or_file)
 		if (folder_or_file === undefined || folder_or_file === null) {
 			vault.create(filePath, fileContents);
 		} else {
@@ -319,7 +436,6 @@ export default class MyPlugin extends Plugin {
 	}
 
 	async getCanvasData(userID: string): Promise<object> {
-		console.log("function call");
 		// TODO: Find out why i cannot call this api from obsidian.md, but I can from my page.
 		const url = `${LIST_USER_COURSES}${ACCESS_TOKEN}`;
 		console.log(url);
@@ -385,42 +501,40 @@ class SampleSettingTab extends PluginSettingTab {
 }
 
 class ApiModal extends Modal {
-  result : string; 
-  onSubmit: (result: string) => void;
-  constructor(app: App, onSubmit: (result: string) => void) {
-    super(app);
-    this.onSubmit = onSubmit; 
-  }
+	result: string;
+	onSubmit: (result: string) => void;
+	constructor(app: App, onSubmit: (result: string) => void) {
+		super(app);
+		this.onSubmit = onSubmit;
+	}
 
-  onOpen() {
-    const {contentEl} = this; 
-    console.log(contentEl)
-    contentEl.setText("Look at me, I am a modal")
+	onOpen() {
+		const { contentEl } = this;
+		console.log(contentEl);
+		contentEl.setText("Look at me, I am a modal");
 
-    contentEl.createEl("h1", {text: "Enter your api key"})
+		contentEl.createEl("h1", { text: "Enter your api key" });
 
-    new Setting(contentEl) 
-      .setName("Enter your api keys")
-      .addText((text) => {
-        text.onChange((val) => {
-          this.result = val; 
-        })
-      })
+		new Setting(contentEl)
+			.setName("Enter your api keys")
+			.addText((text) => {
+				text.onChange((val) => {
+					this.result = val;
+				});
+			});
 
-    new Setting(contentEl)
-      .addButton((btn) => {
-        btn
-          .setButtonText("Submit")
-          .setCta()
-          .onClick(() => {
-            this.close()
-						ACCESS_TOKEN = this.result;
-            this.onSubmit(this.result); 
-          })
-      })  
-  }
-  onClose() {
-    let {contentEl} = this; 
-    contentEl.empty()
-  }
+		new Setting(contentEl).addButton((btn) => {
+			btn.setButtonText("Submit")
+				.setCta()
+				.onClick(() => {
+					this.close();
+					ACCESS_TOKEN = this.result;
+					this.onSubmit(this.result);
+				});
+		});
+	}
+	onClose() {
+		let { contentEl } = this;
+		contentEl.empty();
+	}
 }

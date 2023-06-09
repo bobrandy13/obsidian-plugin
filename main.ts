@@ -18,8 +18,7 @@ import * as fs from "fs";
 import { json } from "stream/consumers";
 import { readFile } from "fs/promises";
 
-let ACCESS_TOKEN =
-	"11644~5p2n81i38xj4Wwlf9tPFvKJAXSekHFufTVthnh8Mes4udNn7ILI8xqp9hh1MjRo4";
+let ACCESS_TOKEN = process.env.ACCESS_TOKEN
 const LIST_COURSE_ASSIGNMENTS = "https://cths.instructure.com/api/v1/courses/";
 const LIST_COURSE_ASSIGNMENTS_2 = "/assignments?access_token=";
 const LIST_USER_COURSES =
